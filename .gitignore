@@ -154,6 +154,4 @@ cython_debug/
 
 .idea/
 
-configs/
-!configs/example_cfg.toml
-
+tests/assets

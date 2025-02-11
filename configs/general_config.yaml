@@ -1,0 +1,39 @@
+input:
+  lsl_signal_stream_name: "BrainVisionRDA"
+  lsl_marker_stream_name: "AuditoryAphasiaMarker"
+output:
+  lsl_stream_name: "ErpDecoding"
+decoding:
+  processing_loop_dt_s: 0.01 # refresh time for the event_loop
+  decode_trigger_markers: [101, 102, 103, 104] # markers which start a new evaluation
+
+  classifier:
+    fband: [4, 15]
+    ivals:
+      [
+        [0.08, 0.15],
+        [0.151, 0.21],
+        [0.211, 0.28],
+        [0.271, 0.35],
+        [0.351, 0.44],
+        [0.45, 0.56],
+        [0.561, 0.7],
+        [0.701, 0.85],
+        [0.851, 1],
+        [1.001, 1.2],
+      ]
+    filter_order: 2
+    filter_freq: [0.5, 8]
+    baseline: null
+    tmin: -0.2
+    tmax: 1.2
+    dynamic_stopping: True
+    dynamic_stopping_params:
+      pvalue: 0.05
+      min_n_stims: 42
+    adaptation: true
+    adaptation_eta_cov: 0.001
+    adaptation_eta_mean: 0.005
+    labels_binary_classification:
+      target: 1
+      nontarget: 0
