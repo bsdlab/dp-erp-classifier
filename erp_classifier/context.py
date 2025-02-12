@@ -39,14 +39,12 @@ class ClassifierContext(CtxBase):
     input_mrk_sw: StreamWatcher = field(init=False)
     filter_bank: FilterBank = field(init=False)
     classifier_cfg: dict = field(default_factory=dict)
-    vectorizer: EpochsVectorizer = field(
-        default_factory=lambda: EpochsVectorizer(
-            jumping_mean_ivals=[0, 0.1], sfreq=1000, t_ref=0
-        )
-    )
+    vectorizer: EpochsVectorizer = field(init=False)
     epo_tmax_s: float = 1
     clf_pipeline: Pipeline = field(init=False)
     outlet: pylsl.StreamOutlet = field(init=False)
+    epochs_accumulating_stack: list = field(default_factory=list)
+    epochs_for_clf_stack: list = field(default_factory=list)
 
     # A list of epoch starts containing tuples of (event_id, filter_buffer_time_idx) for currently
     # accumulating epochs. This is used for bookkeeping as we accumulate overlapping
@@ -58,25 +56,31 @@ class ClassifierContext(CtxBase):
         self.input_sw = StreamWatcher(self.input_signal_stream_name)
         self.input_mrk_sw = StreamWatcher(self.input_marker_stream_name)
 
-        self.vectorizer = EpochsVectorizer(
-            jumping_mean_ivals=self.classifier_cfg["ivals"],
-            sfreq=self.classifier_cfg["ivals"],
-            t_ref=self.classifier_cfg["tmin"],
-        )
         self.epo_tmax_s = self.classifier_cfg["tmax"]
 
         self.init_outlet()
 
-    def connect_input(self, stream_name: str | None = None):
+    def connect_input(
+        self, stream_name: str | None = None, marker_stream_name: str | None = None
+    ):
         # if None, the sw.name is used internally
         id_dict = {"name": stream_name} if stream_name else None
+        id_dict_mrk = {"name": marker_stream_name} if marker_stream_name else None
         self.input_sw.connect_to_stream(identifier=id_dict)
+        self.input_mrk_sw.connect_to_stream(identifier=id_dict_mrk)
 
         self.filter_bank = FilterBank(
             bands={"b1": self.classifier_cfg["fband"]},
             sfreq=self.input_sw.inlet.info().nominal_srate(),
             n_in_channels=len(self.input_sw.channel_names),
             filter_buffer_s=5,
+        )
+
+        # set here as now we know the sampling freq of incoming data (-> no resampling needed as we extract features anyways)
+        self.vectorizer = EpochsVectorizer(
+            jumping_mean_ivals=self.classifier_cfg["ivals"],
+            sfreq=self.input_sw.inlet.info().nominal_srate(),
+            t_ref=self.classifier_cfg["tmin"],
         )
 
     def init_outlet(self):
@@ -98,6 +102,18 @@ class ClassifierContext(CtxBase):
 
     def __repr__(self):
         return super().__repr__()
+
+    def update_stream_watchers(self):
+        """Update the StreamWatchers and check for new data"""
+        self.input_sw.update()
+        self.input_mrk_sw.update()
+
+        # If new data -> filter it
+        if self.input_sw.n_new > 0:
+            x = self.input_sw.unfold_buffer()[-self.input_sw.n_new :]
+            ts = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
+            self.input_sw.n_new = 0
+            self.filter_bank.filter(x, ts)
 
 
 def get_context() -> ClassifierContext:

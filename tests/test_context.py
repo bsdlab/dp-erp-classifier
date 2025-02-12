@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 from erp_classifier.context import get_context
-from tests.shared import spawn_lsl_stream
+from tests.shared import spawn_lsl_marker_stream, spawn_lsl_stream
 
 
 def test_context_initialization():
@@ -12,16 +12,15 @@ def test_context_initialization():
     ctx = get_context()
 
     # assert names of stream watchers are correct
-    assert ctx.input_sw.name == cfg["input"]["lsl_stream_name"]
-    assert ctx.output_sw.name == cfg["output"]["lsl_stream_name"]
+    assert ctx.input_sw.name == cfg["input"]["lsl_signal_stream_name"]
     assert ctx.classifier_cfg["fband"] == cfg["decoding"]["classifier"]["fband"]
 
 
-def test_filterbank_setup(spawn_lsl_stream):
+def test_filterbank_setup(spawn_lsl_stream, spawn_lsl_marker_stream):
 
     ctx = get_context()
 
-    ctx.connect_input(stream_name="test")
+    ctx.connect_input(stream_name="test", marker_stream_name="marker")
     assert ctx.filter_bank.ring_buffer.buffer.shape == (
         500,
         5,

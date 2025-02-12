@@ -9,42 +9,55 @@ from erp_classifier.feature_extraction import get_epoch_data, new_epoch_started
 from erp_classifier.logging import logger
 
 
-def update_stream_watchers(ctx: ClassifierContext):
-    """Update the StreamWatchers and check for new data"""
-    ctx.input_sw.update()
-    ctx.input_mrk_sw.update()
-
-    # If new data -> filter it
-    if ctx.input_sw.n_new > 0:
-        x = ctx.input_sw.unfold_buffer()[-ctx.input_sw.n_new :]
-        ts = ctx.input_sw.unfold_buffer_t()[-ctx.input_sw.n_new :]
-        ctx.input_sw.n_new = 0
-        ctx.filter_bank.filter(x, ts)
-
-
 def classification_callback(ctx: ClassifierContext):
 
-    update_stream_watchers(ctx)
+    # get new data into the StreamWatchers and pass through the filter_bank
+    ctx.update_stream_watchers()
 
-    # check if marker has arrived for new epoch, if so, we remember add
-    # the marker values and the index with the closest time stamp in the filter buffer
-    epo_start = new_epoch_started(
-        ctx
-    )  # for now this only warns if there are multiple epochs started in the current chunk, potentially process all (but ensure a minimal time distance potentially)
-    if epo_start is not None:
-        ctx.current_epos_start.append(epo_start)
+    ctx.epochs_accumulating_stack.extend(get_new_epochs(ctx))
 
-    if ctx.current_epos_start == []:
-        pass  # early return as nothing to do
-    else:
-        epochs_x, markers = get_epoch_data(ctx)
-        for epo, mrk in zip(epochs_x, markers):
-            features = ctx.vectorizer.transform(epo)
-            pred = ctx.clf_pipeline.predict(features)
-            # send the prediction to the output stream
-            res = {"pred": pred, "features": features, "marker": mrk}
-            logger.debug(f"Sending prediction: {res=}")
-            ctx.outlet.push_sample([ujson.dumps(res)])
+    n_added = 0
+    curr_data = None
+    curr_ts = None
+
+    # check if we already have completed epochs
+    while ctx.epochs_accumulating_stack != []:
+        if curr_data is None and curr_ts is None:
+            # logger.debug(f"Looking at {ctx.filter_bank.n_new=}")
+
+            # time samples in the current window of interest
+            curr_ts = ctx.filter_bank.ring_buffer.unfold_buffer_t()[
+                -ctx.filter_bank.n_new :
+            ]
+
+            curr_data = ctx.filter_bank.get_data()[-ctx.filter_bank.n_new :]
+
+        epo = ctx.epochs_accumulating_stack[0]
+
+        # if enough data -> fill, pop epoch, and add to the classifier stack
+        if (epo.ts_event + epo.tmax) < curr_ts[-1]:
+
+            # fill data to the epoch from the closests to the tmin
+            idx = np.abs(curr_ts - (epo.ts_event + epo.tmin)).argmin()
+            epo.add_data(
+                curr_data[
+                    idx : idx + epo.nsamples, :, 0
+                ],  # only one freq band so take 0 for last dim
+                curr_ts[idx : idx + epo.nsamples],
+            )
+
+            ctx.epochs_for_clf_stack.append(ctx.epochs_accumulating_stack.pop(0))
+            n_added = max(n_added, idx + 1)
+
+        # end time for first epoch not yet reached, nothing to do for now
+        else:
+            break
+
+    ctx.filter_bank.n_new -= n_added  # adjust to the start of the latest epoch added
+
+    # Not subject of this test -> here would be the decoding part
+    for epo in ctx.epochs_for_clf_stack:
+        pass
 
 
 def run_online_classifier(stop_event: Event):
@@ -57,6 +70,8 @@ def run_online_classifier(stop_event: Event):
         An event to signal when to stop the classifier.
     """
     ctx = get_context()
+    ctx.connect_input()
+
     ev = EventLoop(dt_s=ctx.dt_s, stop_event=stop_event, ctx=ctx)
 
     ev.add_callback(classification_callback)

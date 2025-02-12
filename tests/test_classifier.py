@@ -8,9 +8,10 @@ import moabb
 import numpy as np
 import pytest
 from dareplane_utils.logging.logger import get_logger
+from sklearn.metrics import accuracy_score
 
 from erp_classifier.classifier.toeplitz_lda import get_toeplitz_LDA_pipeline
-from erp_classifier.context import get_context
+from tests.shared import ctx, spawn_lsl_marker_stream, spawn_lsl_stream
 
 TEST_ASSETS_DIR = Path("./tests/assets")
 TEST_ASSETS_DIR.mkdir(exist_ok=True)
@@ -49,7 +50,7 @@ def test_data() -> tuple[np.ndarray, np.ndarray]:
                 ev,
                 event_id=sev_id,
                 tmin=-0.2,
-                tmax=0.8,
+                tmax=1.2,
                 preload=True,
             )
             epo.resample(sfreq=100)
@@ -81,6 +82,43 @@ def test_train_classifier(test_data):
     assert (pl.steps[0][-1].classes_ == np.array([0, 1])).all()
 
 
-def test_vectorization_of_epochs(test_data):
+def test_vectorization_of_epochs(
+    ctx, test_data, spawn_lsl_stream, spawn_lsl_marker_stream
+):
     X, y = test_data
-    pass
+
+    # connect to an LSL inlet to initialize the vectorizer with correct sfreq
+    ctx.connect_input(stream_name="test", marker_stream_name="markers")
+
+    features = ctx.vectorizer.transform(X)
+    assert features.shape[0] == X.shape[0]
+    assert (
+        features.shape[-1] == len(ctx.classifier_cfg["ivals"]) * X.shape[1]
+    )  # one features for each time window defined x n_channels
+
+
+def test_prediction_accuracy(ctx, test_data, spawn_lsl_stream, spawn_lsl_marker_stream):
+    X, y = test_data
+
+    # connect to an LSL inlet to initialize the vectorizer with correct sfreq
+    ctx.connect_input(stream_name="test", marker_stream_name="markers")
+
+    features = ctx.vectorizer.transform(X)
+
+    pl = get_toeplitz_LDA_pipeline(n_channels=X.shape[1])
+
+    idx_cut_off = int(X.shape[0] * 0.8)
+
+    ftrain = features[:idx_cut_off]
+    ftest = features[idx_cut_off:]
+    ytrain = y[:idx_cut_off].ravel()
+    ytest = y[idx_cut_off:].ravel()
+
+    pl.fit(ftrain, ytrain)
+
+    pred = pl.predict(ftest)
+    acc = accuracy_score(ytest, pred)
+
+    logger.debug(f"Achieved {acc:.2%} accuracy_score")
+
+    assert acc > 0.8  # with the initial cfg, it should be ~0.83
