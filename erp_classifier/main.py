@@ -1,4 +1,5 @@
 # The main event loop
+import time
 from threading import Event, Thread
 
 import ujson
@@ -55,9 +56,16 @@ def classification_callback(ctx: ClassifierContext):
 
     ctx.filter_bank.n_new -= n_added  # adjust to the start of the latest epoch added
 
-    # Not subject of this test -> here would be the decoding part
     for epo in ctx.epochs_for_clf_stack:
-        pass
+        # get feature vector and store for online adaptation
+        vec = ctx.vectorizer.transform(epo.data)
+        ctx.feature_vecs.add_samples([vec], [time.perf_counter()])
+
+        # predict
+        pred = ctx.clf_pipeline.predict(vec)
+
+        # send to LSL
+        ctx.outlet.push_sample(ujson.dumps({"pred": pred.tolist()}))
 
 
 def run_online_classifier(stop_event: Event):

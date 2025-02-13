@@ -1,8 +1,10 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pylsl
 import yaml
+from dareplane_utils.general.ringbuffer import RingBuffer
 from dareplane_utils.signal_processing.filtering import FilterBank
 from dareplane_utils.stream_watcher.lsl_stream_watcher import StreamWatcher
 
@@ -41,10 +43,13 @@ class ClassifierContext(CtxBase):
     classifier_cfg: dict = field(default_factory=dict)
     vectorizer: EpochsVectorizer = field(init=False)
     epo_tmax_s: float = 1
+    epo_n_times: int = 0
     clf_pipeline: Pipeline = field(init=False)
     outlet: pylsl.StreamOutlet = field(init=False)
     epochs_accumulating_stack: list = field(default_factory=list)
     epochs_for_clf_stack: list = field(default_factory=list)
+    feature_vecs: RingBuffer = field(init=False)
+    feature_vecs_buffer_size: int = 100
 
     # A list of epoch starts containing tuples of (event_id, filter_buffer_time_idx) for currently
     # accumulating epochs. This is used for bookkeeping as we accumulate overlapping
@@ -81,6 +86,21 @@ class ClassifierContext(CtxBase):
             jumping_mean_ivals=self.classifier_cfg["ivals"],
             sfreq=self.input_sw.inlet.info().nominal_srate(),
             t_ref=self.classifier_cfg["tmin"],
+        )
+
+        self.epo_n_times = int(
+            (self.classifier_cfg["tmax"] - self.classifier_cfg["tmin"])
+            * self.input_sw.inlet.info().nominal_srate()
+        )
+
+        # just check how the vetorizer would transform the data (knowing the outbound dimensions)
+        dummy_vecs = self.vectorizer.transform(
+            np.ones((1, len(self.input_sw.channel_names), self.epo_n_times))
+        )
+
+        # initialize the vector store which is used for the online adaptation
+        self.feature_vecs = RingBuffer(
+            (self.feature_vecs_buffer_size, dummy_vecs.shape[1])
         )
 
     def init_outlet(self):
